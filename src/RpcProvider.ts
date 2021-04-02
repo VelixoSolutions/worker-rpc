@@ -1,20 +1,31 @@
-import {Event} from 'microevent.ts';
+/* eslint-disable */
 
-import RpcProviderInterface from './RpcProviderInterface';
+import { Event } from 'microevent.ts';
 
-const MSG_RESOLVE_TRANSACTION = "resolve_transaction",
-    MSG_REJECT_TRANSACTION = "reject_transaction",
-    MSG_ERROR = "error";
+const MSG_RESOLVE_TRANSACTION = 'resolve_transaction',
+    MSG_REJECT_TRANSACTION = 'reject_transaction',
+    MSG_ERROR = 'error';
+
+export module RpcProviderInterface {
+    export interface RpcHandler<T = void, U = void> {
+        (payload: T): Promise<U> | U;
+    }
+
+    export interface SignalHandler<T = void> {
+        (payload: T): void;
+    }
+}
 
 interface Transaction {
     id: number;
     timeoutHandle?: any;
     resolve(result: any): void;
-    reject(error: string): void;
+    reject(error: any): void;
+    transformResult?(result: any): any;
+    transformError?(error: any): any;
 }
 
-class RpcProvider implements RpcProviderInterface {
-
+class RpcProvider {
     constructor(
         private _dispatch: RpcProvider.Dispatcher,
         private _rpcTimeout = 0
@@ -28,7 +39,7 @@ class RpcProvider implements RpcProviderInterface {
                 return this._handleSignal(message);
 
             case RpcProvider.MessageType.rpc:
-                return this._handeRpc(message);
+                return this._handleRpc(message);
 
             case RpcProvider.MessageType.internal:
                 return this._handleInternal(message);
@@ -38,53 +49,79 @@ class RpcProvider implements RpcProviderInterface {
         }
     }
 
-    rpc<T = void, U = void>(id: string, payload?: T, transfer?: any): Promise<U> {
+    rpc<T = void, U = void>(
+        id: string,
+        payload?: T,
+        transfer?: any,
+        transformResult?: any,
+        transformError?: any
+    ): Promise<U> {
         const transactionId = this._nextTransactionId++;
 
-        this._dispatch({
-            type: RpcProvider.MessageType.rpc,
-            transactionId,
-            id,
-            payload
-        }, transfer ? transfer : undefined);
-
-        return new Promise(
-            (resolve, reject) => {
-                const transaction = this._pendingTransactions[transactionId] = {
-                    id: transactionId,
-                    resolve,
-                    reject
-                };
-
-                if (this._rpcTimeout > 0) {
-                    this._pendingTransactions[transactionId].timeoutHandle =
-                        setTimeout(() => this._transactionTimeout(transaction), this._rpcTimeout);
-                }
-            }
+        this._dispatch(
+            {
+                type: RpcProvider.MessageType.rpc,
+                transactionId,
+                id,
+                payload,
+            },
+            transfer ? transfer : undefined
         );
-    };
+
+        return new Promise((resolve, reject) => {
+            const transaction = (this._pendingTransactions[transactionId] = {
+                id: transactionId,
+                resolve,
+                reject,
+                transformResult,
+                transformError,
+            });
+
+            if (this._rpcTimeout > 0) {
+                this._pendingTransactions[
+                    transactionId
+                ].timeoutHandle = setTimeout(
+                    () => this._transactionTimeout(transaction),
+                    this._rpcTimeout
+                );
+            }
+        });
+    }
 
     signal<T = void>(id: string, payload?: T, transfer?: any): this {
-        this._dispatch({
-            type: RpcProvider.MessageType.signal,
-            id,
-            payload,
-        }, transfer ? transfer : undefined);
+        this._dispatch(
+            {
+                type: RpcProvider.MessageType.signal,
+                id,
+                payload,
+            },
+            transfer ? transfer : undefined
+        );
 
         return this;
     }
 
-    registerRpcHandler<T = void, U = void>(id: string, handler: RpcProviderInterface.RpcHandler<T, U>): this {
+    registerRpcHandler<T = void, U = void>(
+        id: string,
+        handler: RpcProviderInterface.RpcHandler<T, U>,
+        transformError?: (error: any) => any
+    ): this {
         if (this._rpcHandlers[id]) {
             throw new Error(`rpc handler for ${id} already registered`);
         }
 
-        this._rpcHandlers[id] = handler;
+        this._rpcHandlers[id] = {
+            handler,
+            transformError,
+        };
 
         return this;
-    };
+    }
 
-    registerSignalHandler<T = void>(id: string, handler: RpcProviderInterface.SignalHandler<T>): this {
+    registerSignalHandler<T = void>(
+        id: string,
+        handler: RpcProviderInterface.SignalHandler<T>
+    ): this {
         if (!this._signalHandlers[id]) {
             this._signalHandlers[id] = [];
         }
@@ -94,29 +131,34 @@ class RpcProvider implements RpcProviderInterface {
         return this;
     }
 
-    deregisterRpcHandler<T = void, U = void>(id: string, handler: RpcProviderInterface.RpcHandler<T, U>): this {
+    deregisterRpcHandler<T = void, U = void>(id: string): this {
         if (this._rpcHandlers[id]) {
             delete this._rpcHandlers[id];
         }
 
         return this;
-    };
+    }
 
-    deregisterSignalHandler<T = void>(id: string, handler: RpcProviderInterface.SignalHandler<T>): this {
+    deregisterSignalHandler<T = void>(
+        id: string,
+        handler: RpcProviderInterface.SignalHandler<T>
+    ): this {
         if (this._signalHandlers[id]) {
-            this._signalHandlers[id] = this._signalHandlers[id].filter(h => handler !== h);
+            this._signalHandlers[id] = this._signalHandlers[id].filter(
+                h => handler !== h
+            );
         }
 
         return this;
     }
 
-    private _raiseError(error: string): void {
+    private _raiseError(error: any): void {
         this.error.dispatch(new Error(error));
 
         this._dispatch({
             type: RpcProvider.MessageType.internal,
             id: MSG_ERROR,
-            payload: error
+            payload: error,
         });
     }
 
@@ -125,57 +167,85 @@ class RpcProvider implements RpcProviderInterface {
             return this._raiseError(`invalid signal ${message.id}`);
         }
 
-        this._signalHandlers[message.id].forEach(handler => handler(message.payload));
+        this._signalHandlers[message.id].forEach(handler =>
+            handler(message.payload)
+        );
     }
 
-    private _handeRpc(message: RpcProvider.Message): void {
+    private _handleRpc(message: RpcProvider.Message): void {
         if (!this._rpcHandlers[message.id]) {
             return this._raiseError(`invalid rpc ${message.id}`);
         }
 
-        Promise.resolve(this._rpcHandlers[message.id](message.payload))
-            .then(
-                (result: any) => this._dispatch({
+        const handler = this._rpcHandlers[message.id];
+
+        Promise.resolve(handler.handler(message.payload)).then(
+            (result: any) =>
+                this._dispatch({
                     type: RpcProvider.MessageType.internal,
                     id: MSG_RESOLVE_TRANSACTION,
                     transactionId: message.transactionId,
-                    payload: result
+                    payload: result,
                 }),
-                (reason: string) => this._dispatch({
+            (reason: any) =>
+                this._dispatch({
                     type: RpcProvider.MessageType.internal,
                     id: MSG_REJECT_TRANSACTION,
                     transactionId: message.transactionId,
-                    payload: reason
+                    payload: handler.transformError?.(reason) ?? reason,
                 })
-            );
+        );
     }
 
     private _handleInternal(message: RpcProvider.Message): void {
-        const transaction = typeof(message.transactionId) !== 'undefined' ? this._pendingTransactions[message.transactionId] : undefined;
+        const transaction =
+            typeof message.transactionId !== 'undefined'
+                ? this._pendingTransactions[message.transactionId]
+                : undefined;
 
         switch (message.id) {
             case MSG_RESOLVE_TRANSACTION:
-                if (!transaction || typeof(message.transactionId) === 'undefined') {
-                    return this._raiseError(`no pending transaction with id ${message.transactionId}`);
+                if (
+                    !transaction ||
+                    typeof message.transactionId === 'undefined'
+                ) {
+                    return this._raiseError(
+                        `no pending transaction with id ${message.transactionId}`
+                    );
                 }
 
-                transaction.resolve(message.payload);
-                this._clearTransaction(this._pendingTransactions[message.transactionId]);
+                transaction.resolve(
+                    transaction.transformResult?.(message.payload) ??
+                        message.payload
+                );
+
+                this._clearTransaction(transaction);
 
                 break;
 
             case MSG_REJECT_TRANSACTION:
-                if (!transaction || typeof(message.transactionId) === 'undefined') {
-                    return this._raiseError(`no pending transaction with id ${message.transactionId}`);
+                if (
+                    !transaction ||
+                    typeof message.transactionId === 'undefined'
+                ) {
+                    return this._raiseError(
+                        `no pending transaction with id ${message.transactionId}`
+                    );
                 }
 
-                this._pendingTransactions[message.transactionId].reject(message.payload);
-                this._clearTransaction(this._pendingTransactions[message.transactionId]);
+                transaction.reject(
+                    transaction.transformError?.(message.payload) ??
+                        message.payload
+                );
+
+                this._clearTransaction(transaction);
 
                 break;
 
             case MSG_ERROR:
-                this.error.dispatch(new Error(`remote error: ${message.payload}`));
+                this.error.dispatch(
+                    new Error(`remote error: ${message.payload}`)
+                );
                 break;
 
             default:
@@ -195,7 +265,7 @@ class RpcProvider implements RpcProviderInterface {
     }
 
     private _clearTransaction(transaction: Transaction): void {
-        if (typeof(transaction.timeoutHandle) !== 'undefined') {
+        if (typeof transaction.timeoutHandle !== 'undefined') {
             clearTimeout(transaction.timeoutHandle);
         }
 
@@ -204,20 +274,28 @@ class RpcProvider implements RpcProviderInterface {
 
     error = new Event<Error>();
 
-    private _rpcHandlers: {[id: string]: RpcProviderInterface.RpcHandler<any, any>} = {};
-    private _signalHandlers: {[id: string]: Array<RpcProviderInterface.SignalHandler<any>>} = {};
-    private _pendingTransactions: {[id: number]: Transaction} = {};
+    private _rpcHandlers: {
+        [id: string]: {
+            handler: RpcProviderInterface.RpcHandler<any, any>;
+            transformError?(error: any): any;
+        };
+    } = {};
+
+    private _signalHandlers: {
+        [id: string]: Array<RpcProviderInterface.SignalHandler<any>>;
+    } = {};
+
+    private _pendingTransactions: { [id: number]: Transaction } = {};
 
     private _nextTransactionId = 0;
 }
 
 module RpcProvider {
-
     export enum MessageType {
         signal,
         rpc,
-        internal
-    };
+        internal,
+    }
 
     export interface Dispatcher {
         (message: Message, transfer?: Array<any>): void;
@@ -229,7 +307,6 @@ module RpcProvider {
         id: string;
         payload?: any;
     }
-
 }
 
 export default RpcProvider;
