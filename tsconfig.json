@@ -16,7 +16,7 @@
         "strictPropertyInitialization": true,
         "noUnusedLocals": true,
         "noImplicitReturns": true,
-        "alwaysStrict": true,
+        "alwaysStrict": true
     },
     "include": ["src/**/*.ts", "test/**/*.ts"],
     "exclude": ["node_modules"]
