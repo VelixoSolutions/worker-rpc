@@ -78,12 +78,11 @@ class RpcProvider {
             });
 
             if (this._rpcTimeout > 0) {
-                this._pendingTransactions[
-                    transactionId
-                ].timeoutHandle = setTimeout(
-                    () => this._transactionTimeout(transaction),
-                    this._rpcTimeout
-                );
+                this._pendingTransactions[transactionId].timeoutHandle =
+                    setTimeout(
+                        () => this._transactionTimeout(transaction),
+                        this._rpcTimeout
+                    );
             }
         });
     }
