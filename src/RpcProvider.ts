@@ -21,14 +21,18 @@ interface Transaction {
     timeoutHandle?: any;
     resolve(result: any): void;
     reject(error: any): void;
-    transformResult?(result: any): any;
-    transformError?(error: any): any;
 }
 
 class RpcProvider {
     constructor(
         private _dispatch: RpcProvider.Dispatcher,
-        private _rpcTimeout = 0
+        private _rpcTimeout = 0,
+        private _serializeError:
+            | ((error: unknown) => unknown)
+            | undefined = undefined,
+        private _deserializeError:
+            | ((error: unknown) => unknown)
+            | undefined = undefined
     ) {}
 
     dispatch(payload: any): void {
@@ -52,9 +56,7 @@ class RpcProvider {
     rpc<T = void, U = void>(
         id: string,
         payload?: T,
-        transfer?: any,
-        transformResult?: any,
-        transformError?: any
+        transfer?: any
     ): Promise<U> {
         const transactionId = this._nextTransactionId++;
 
@@ -73,8 +75,6 @@ class RpcProvider {
                 id: transactionId,
                 resolve,
                 reject,
-                transformResult,
-                transformError,
             });
 
             if (this._rpcTimeout > 0) {
@@ -102,17 +102,13 @@ class RpcProvider {
 
     registerRpcHandler<T = void, U = void>(
         id: string,
-        handler: RpcProviderInterface.RpcHandler<T, U>,
-        transformError?: (error: any) => any
+        handler: RpcProviderInterface.RpcHandler<T, U>
     ): this {
         if (this._rpcHandlers[id]) {
             throw new Error(`rpc handler for ${id} already registered`);
         }
 
-        this._rpcHandlers[id] = {
-            handler,
-            transformError,
-        };
+        this._rpcHandlers[id] = handler;
 
         return this;
     }
@@ -178,7 +174,7 @@ class RpcProvider {
 
         const handler = this._rpcHandlers[message.id];
 
-        Promise.resolve(handler.handler(message.payload)).then(
+        Promise.resolve(handler(message.payload)).then(
             (result: any) =>
                 this._dispatch({
                     type: RpcProvider.MessageType.internal,
@@ -191,7 +187,7 @@ class RpcProvider {
                     type: RpcProvider.MessageType.internal,
                     id: MSG_REJECT_TRANSACTION,
                     transactionId: message.transactionId,
-                    payload: handler.transformError?.(reason) ?? reason,
+                    payload: this._serializeError?.(reason) ?? reason,
                 })
         );
     }
@@ -213,10 +209,7 @@ class RpcProvider {
                     );
                 }
 
-                transaction.resolve(
-                    transaction.transformResult?.(message.payload) ??
-                        message.payload
-                );
+                transaction.resolve(message.payload);
 
                 this._clearTransaction(transaction);
 
@@ -233,8 +226,7 @@ class RpcProvider {
                 }
 
                 transaction.reject(
-                    transaction.transformError?.(message.payload) ??
-                        message.payload
+                    this._deserializeError?.(message.payload) ?? message.payload
                 );
 
                 this._clearTransaction(transaction);
@@ -274,10 +266,7 @@ class RpcProvider {
     error = new Event<Error>();
 
     private _rpcHandlers: {
-        [id: string]: {
-            handler: RpcProviderInterface.RpcHandler<any, any>;
-            transformError?(error: any): any;
-        };
+        [id: string]: RpcProviderInterface.RpcHandler<any, any>;
     } = {};
 
     private _signalHandlers: {
