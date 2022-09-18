@@ -126,7 +126,7 @@ class RpcProvider {
         return this;
     }
 
-    deregisterRpcHandler<T = void, U = void>(id: string): this {
+    deregisterRpcHandler(id: string): this {
         if (this._rpcHandlers[id]) {
             delete this._rpcHandlers[id];
         }
