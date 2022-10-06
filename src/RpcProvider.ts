@@ -1,5 +1,6 @@
 /* eslint-disable */
 
+// @ts-ignore
 import { Event } from 'microevent.ts';
 
 const MSG_RESOLVE_TRANSACTION = 'resolve_transaction',
