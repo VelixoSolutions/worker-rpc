@@ -235,7 +235,7 @@ suite('RPC provider', function () {
             const handler = () => 10;
 
             remote.registerRpcHandler('action', handler);
-            remote.deregisterRpcHandler('action', handler);
+            remote.deregisterRpcHandler('action');
 
             return local.rpc('action').then(
                 () => Promise.reject('should have been rejected'),
