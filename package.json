@@ -3,8 +3,7 @@
     "version": "0.2.0",
     "description": "A simple RPC layer for communicating with web workers and over other transports",
     "scripts": {
-        "prepublish": "tsc",
-        "test": "mocha --require ts-node/register -R spec -u tdd 'test/**/*.ts'"
+        "prepublish": "tsc"
     },
     "author": "Christian Speckner <cnspeckn@googlemail.com> (https://github.com/DirtyHairy/)",
     "license": "MIT",
